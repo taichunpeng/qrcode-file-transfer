@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>接收文件 - 二维码传输</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        .header a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .scanner-area {
+            position: relative;
+            width: 100%;
+            max-width: 350px;
+            margin: 0 auto 20px;
+            border-radius: 15px;
+            overflow: hidden;
+            background: #000;
+        }
+        #video {
+            width: 100%;
+            display: block;
+        }
+        #canvas {
+            display: none;
+        }
+        .scanner-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+        .scanner-frame {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 250px;
+            height: 250px;
+            border: 3px solid #667eea;
+            border-radius: 15px;
+            animation: scan 2s ease-in-out infinite;
+        }
+        @keyframes scan {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        .status-bar {
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        .status-row:last-child {
+            margin-bottom: 0;
+        }
+        .status-label {
+            color: #666;
+        }
+        .status-value {
+            color: #333;
+            font-weight: 600;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #eee;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s ease;
+        }
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        .status.scanning {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        .status.receiving {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        .status.complete {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #666;
+        }
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .received-info {
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: none;
+        }
+        .received-info.show {
+            display: block;
+        }
+        .received-file {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+            word-break: break-all;
+        }
+        .received-size {
+            color: #666;
+            font-size: 14px;
+        }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+        .btn-group .btn {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📷 接收文件</h1>
+            <a href="index.html">← 返回首页</a>
+        </div>
+
+        <div class="scanner-area">
+            <video id="video" playsinline autoplay></video>
+            <canvas id="canvas"></canvas>
+            <div class="scanner-overlay">
+                <div class="scanner-frame"></div>
+            </div>
+        </div>
+
+        <button class="btn btn-primary" id="start-btn">开始扫描</button>
+        <button class="btn btn-secondary" id="stop-btn" style="display: none;">停止扫描</button>
+
+        <div class="status-bar" id="status-bar" style="display: none;">
+            <div class="status-row">
+                <span class="status-label">文件名</span>
+                <span class="status-value" id="file-name">-</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">已收集</span>
+                <span class="status-value" id="collected">0 / 0</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Hash校验</span>
+                <span class="status-value" id="hash-status">等待中...</span>
+            </div>
+        </div>
+        
+        <div class="progress-bar" id="progress-bar" style="display: none;">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
+        <div class="status scanning" id="status">点击开始扫描，将摄像头对准发送端的二维码</div>
+
+        <div class="received-info" id="received-info">
+            <div class="received-file" id="received-file-name"></div>
+            <div class="received-size" id="received-file-size"></div>
+        </div>
+
+        <div class="btn-group" id="btn-group" style="display: none;">
+            <button class="btn btn-primary" id="download-btn">📥 下载文件</button>
+            <button class="btn btn-secondary" id="reset-btn">🔄 重新扫描</button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
+    <script src="https://unpkg.com/pako@2.1.0/dist/pako.js"></script>
+    <script>
+        let videoStream = null;
+        let animationId = null;
+        let chunks = {};
+        let totalChunks = 0;
+        let currentFileName = '';
+        let currentHash = '';
+        let isReceiving = false;
+        
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const statusBar = document.getElementById('status-bar');
+        const progressBar = document.getElementById('progress-bar');
+        const statusEl = document.getElementById('status');
+        const fileNameEl = document.getElementById('file-name');
+        const collectedEl = document.getElementById('collected');
+        const hashStatusEl = document.getElementById('hash-status');
+        const progressFill = document.getElementById('progress-fill');
+        const receivedInfo = document.getElementById('received-info');
+        const receivedFileName = document.getElementById('received-file-name');
+        const receivedFileSize = document.getElementById('received-file-size');
+        const btnGroup = document.getElementById('btn-group');
+        const downloadBtn = document.getElementById('download-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        
+        // 检查库
+        console.log('jsQR:', typeof jsQR);
+        console.log('pako:', typeof pako);
+        
+        // 开始扫描
+        startBtn.addEventListener('click', startScan);
+        stopBtn.addEventListener('click', stopScan);
+        downloadBtn.addEventListener('click', downloadFile);
+        resetBtn.addEventListener('click', resetScan);
+        
+        async function startScan() {
+            try {
+                statusEl.textContent = '正在请求摄像头权限...';
+                
+                // 尝试后置摄像头，失败则用前置
+                let constraints = { video: { facingMode: 'environment' } };
+                try {
+                    videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (e) {
+                    statusEl.textContent = '后置摄像头不可用，尝试前置...';
+                    videoStream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'user' }
+                    });
+                }
+                video.srcObject = videoStream;
+                await video.play();
+                
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+                statusBar.style.display = 'block';
+                progressBar.style.display = 'block';
+                statusEl.className = 'status scanning';
+                statusEl.textContent = '正在扫描...请将摄像头对准二维码';
+                
+                chunks = {};
+                totalChunks = 0;
+                currentFileName = '';
+                currentHash = '';
+                isReceiving = true;
+                
+                scan();
+            } catch (err) {
+                let msg = err.message;
+                if (err.name === 'NotAllowedError') {
+                    msg = '摄像头权限被拒绝！\n\n请在浏览器设置中允许摄像头权限，或检查是否为HTTPS连接。';
+                } else if (err.name === 'NotFoundError') {
+                    msg = '未找到摄像头设备';
+                }
+                statusEl.className = 'status error';
+                statusEl.textContent = '❌ ' + msg;
+            }
+        }
+        
+        function stopScan() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+            }
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            startBtn.style.display = 'block';
+            stopBtn.style.display = 'none';
+            isReceiving = false;
+        }
+        
+        function scan() {
+            if (!isReceiving) return;
+            
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = jsQR(imageData.data, canvas.width, canvas.height, {
+                inversionAttempts: 'dontInvert'
+            });
+            
+            if (code) {
+                processQRData(code.data);
+            }
+            
+            animationId = requestAnimationFrame(scan);
+        }
+        
+        function processQRData(data) {
+            try {
+                // 解析格式: FILE:hash:part/total:base64_filename|||data
+                const parts = data.split('|||');
+                if (parts.length < 2 || !parts[0].startsWith('FILE:')) {
+                    return;
+                }
+                
+                const header = parts[0];
+                const body = parts[1];
+                
+                // 解析头部: FILE:hash:part/total:base64_filename
+                const headerParts = header.substring(5).split(':');
+                if (headerParts.length < 3) return;
+                
+                const hash = headerParts[0];
+                const part = parseInt(headerParts[1]);
+                const total = parseInt(headerParts[2]);
+                const fileNameEncoded = headerParts[3] || '';
+                
+                // 首次接收，设置元信息
+                if (Object.keys(chunks).length === 0) {
+                    currentHash = hash;
+                    try {
+                        currentFileName = fileNameEncoded ? decodeURIComponent(fileNameEncoded) : 'file';
+                    } catch(e) {
+                        currentFileName = 'file';
+                    }
+                    totalChunks = total;
+                    
+                    fileNameEl.textContent = currentFileName;
+                    collectedEl.textContent = '0 / ' + total;
+                    statusEl.className = 'status receiving';
+                    statusEl.textContent = '正在接收...';
+                }
+                
+                // 检查hash匹配
+                if (hash !== currentHash) {
+                    statusEl.className = 'status error';
+                    statusEl.textContent = 'Hash不匹配，请重新扫描！';
+                    return;
+                }
+                
+                // 存储数据块
+                if (!chunks[part]) {
+                    chunks[part] = body;
+                    const collected = Object.keys(chunks).length;
+                    collectedEl.textContent = collected + ' / ' + totalChunks;
+                    progressFill.style.width = (collected / totalChunks * 100) + '%';
+                    
+                    // 检查是否完成
+                    if (collected >= totalChunks) {
+                        completeTransfer();
+                    }
+                }
+            } catch (err) {
+                console.error('解析错误:', err);
+            }
+        }
+        
+        function completeTransfer() {
+            stopScan();
+            
+            statusEl.className = 'status complete';
+            statusEl.textContent = '✅ 接收完成！';
+            hashStatusEl.textContent = '✅ 匹配成功';
+            
+            // 重组数据
+            let fullData = '';
+            for (let i = 1; i <= totalChunks; i++) {
+                fullData += chunks[i];
+            }
+            
+            // Base64解码
+            const binary = atob(fullData);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            
+            // 解压
+            const decompressed = pako.ungzip(bytes);
+            
+            // 创建Blob
+            const blob = new Blob([decompressed]);
+            
+            // 显示接收信息
+            receivedFileName.textContent = currentFileName;
+            receivedFileSize.textContent = formatSize(blob.size);
+            receivedInfo.classList.add('show');
+            btnGroup.style.display = 'flex';
+            
+            // 保存用于下载
+            window.receivedBlob = blob;
+            window.receivedName = currentFileName;
+        }
+        
+        function downloadFile() {
+            if (!window.receivedBlob) return;
+            
+            const url = URL.createObjectURL(window.receivedBlob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = window.receivedName;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+        
+        function resetScan() {
+            location.reload();
+        }
+        
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+    </script>
+</body>
+</html>
