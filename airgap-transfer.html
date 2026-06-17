@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="zh-CN">
+<!--
+  隔空传文件 v1.0
+  ─ 发送端：选文件 → cimbar WASM 编码 → 屏幕显示彩色二维码动画
+  ─ 接收端：摄像头捕获 → cimbar WASM 解码 → 还原文件
+  基于 sz3/libcimbar (https://github.com/sz3/libcimbar)
+-->
+<head>
+  <title>隔空传文件 — AirGap Transfer</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <style>
+    :root {
+      --primary: #1565c0;
+      --primary-light: #1976d2;
+      --accent: #00c8ff;
+      --bg: #0a0e17;
+      --card: #141828;
+      --panel: #1a1a2e;
+      --text: #e0e0e0;
+      --muted: #888;
+      --border: #2a2a4a;
+      --ok: #4caf50;
+      --warn: #ff9800;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh; overflow: hidden;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* ── 顶部栏 ── */
+    #topbar {
+      position: fixed; top:0; left:0; right:0; height:56px; z-index:100;
+      background: linear-gradient(135deg, #0d47a1, var(--primary));
+      display:flex; align-items:center; justify-content:center;
+      box-shadow: 0 2px 16px rgba(0,0,0,.5);
+    }
+    #topbar h1 { font-size:1.15em; color:#fff; font-weight:600; letter-spacing:.5px; text-align:center; line-height:1.3; }
+    #topbar h1 small { display:block; font-size:.6em; color:rgba(255,255,255,.55); font-weight:400; letter-spacing:0; }
+    #topbar .sw { position:absolute; right:10px; display:flex; gap:6px; }
+    .sw-btn {
+      padding:5px 14px; border-radius:18px; border:1.5px solid rgba(255,255,255,.35);
+      background:transparent; color:#fff; font-size:.82em; cursor:pointer;
+      font-family:inherit; transition: all .2s;
+    }
+    .sw-btn.on { background:rgba(255,255,255,.22); border-color:#fff; font-weight:600; }
+    .sw-btn:hover { background:rgba(255,255,255,.12); }
+
+    /* ── 主区域 ── */
+    #main { margin-top:56px; height:calc(100vh - 56px); display:flex; align-items:center; justify-content:center; position:relative; }
+
+    /* ── 发送面板 ── */
+    #send-panel { width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:12px; }
+    #dropzone {
+      width: min(90vw, calc(90vh - 140px), 700px);
+      height: min(90vw, calc(90vh - 140px), 700px);
+      background: var(--panel);
+      border: 3px dashed var(--border);
+      border-radius: 20px;
+      display:flex; align-items:center; justify-content:center; flex-direction:column; gap:12px;
+      cursor:pointer; transition: all .3s; position:relative; overflow:hidden;
+    }
+    #dropzone:hover, #dropzone.dragover { border-color:var(--accent); background:#1a1a3e; }
+    #dropzone.fileok { border:3px solid var(--ok); border-style:solid; }
+    #dropzone .icon { font-size:3.8em; opacity:.45; transition: all .3s; }
+    #dropzone:hover .icon { opacity:.75; transform:scale(1.08); }
+    #dropzone .txt { font-size:1.05em; color:var(--muted); text-align:center; padding:0 24px; line-height:1.6; }
+    #dropzone .hint { font-size:.78em; color:#555; }
+    #dropzone canvas { max-width:96%; max-height:96%; border-radius:12px; display:none; }
+    #dropzone.fileok canvas { display:block; }
+    #dropzone.fileok .icon, #dropzone.fileok .txt, #dropzone.fileok .hint { display:none; }
+
+    /* 发送状态栏 */
+    #send-bar {
+      position:absolute; bottom:18px; left:50%; transform:translateX(-50%);
+      background:rgba(10,14,23,.88); backdrop-filter:blur(8px);
+      border:1px solid var(--border); border-radius:14px;
+      padding:9px 22px; display:flex; align-items:center; gap:14px; font-size:.88em;
+      max-width:92vw; flex-wrap:wrap; justify-content:center;
+    }
+    #fname { color:var(--ok); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #prog-wrap { display:none; align-items:center; gap:8px; }
+    #prog-bar { width:140px; height:6px; background:#1e1e30; border-radius:3px; overflow:hidden; }
+    #prog-fill { height:100%; width:0; border-radius:3px; background:linear-gradient(90deg,#00c6ff,#0072ff); transition:width .3s ease; }
+    #prog-txt { color:var(--muted); font-size:.82em; min-width:38px; }
+
+    .help { position:absolute; bottom:76px; left:50%; transform:translateX(-50%); color:#444; font-size:.76em; text-align:center; width:88%; }
+
+    /* ── 接收面板 ── */
+    #recv-panel { width:100%; height:100%; display:none; flex-direction:column; align-items:center; justify-content:center; position:relative; background:#000; }
+    #cam-wrap {
+      width:min(92vw, calc(92vh - 140px), 720px);
+      height:min(92vw, calc(92vh - 140px), 720px);
+      background:#000; border-radius:20px; overflow:hidden; position:relative;
+      box-shadow: 0 0 40px rgba(0,200,255,.12);
+    }
+    #video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+    /* 扫描框 */
+    #scan {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      width:66%; height:66%; pointer-events:none;
+    }
+    #scan .rect { position:absolute; inset:0; border:2.5px solid rgba(0,200,255,.55); border-radius:14px;
+      box-shadow:0 0 20px rgba(0,200,255,.15), inset 0 0 20px rgba(0,200,255,.06); }
+    #scan .c { position:absolute; width:22px; height:22px; border-color:var(--accent); border-style:solid; }
+    #scan .c.tl { top:-2px;left:-2px; border-width:4px 0 0 4px; border-radius:10px 0 0 0; }
+    #scan .c.tr { top:-2px;right:-2px; border-width:4px 4px 0 0; border-radius:0 10px 0 0; }
+    #scan .c.bl { bottom:-2px;left:-2px; border-width:0 0 4px 4px; border-radius:0 0 0 10px; }
+    #scan .c.br { bottom:-2px;right:-2px; border-width:0 4px 4px 0; border-radius:0 0 10px 0; }
+    #scan-line {
+      position:absolute; top:15%; left:50%; transform:translateX(-50%);
+      width:66%; height:2px; border-radius:1px;
+      background:linear-gradient(90deg,transparent,var(--accent),transparent);
+      box-shadow:0 0 10px var(--accent); animation:scn 2.5s linear infinite;
+    }
+    @keyframes scn { 0%{top:15%;} 100%{top:85%;} }
+    #scan-pulse {
+      position:absolute; inset:0; border:1px solid rgba(0,200,255,.2); border-radius:14px;
+      animation:pls 2s ease-in-out infinite;
+    }
+    @keyframes pls { 0%,100%{opacity:.15;transform:scale(1);} 50%{opacity:.4;transform:scale(1.015);} }
+
+    /* 接收状态栏 */
+    #recv-bar {
+      position:absolute; bottom:18px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,.82); backdrop-filter:blur(8px);
+      border:1px solid #333; border-radius:14px;
+      padding:9px 22px; display:flex; align-items:center; gap:12px; font-size:.88em;
+      max-width:92vw; flex-wrap:wrap; justify-content:center;
+    }
+    #recv-txt { color:#bbb; }
+    #recv-prog-wrap { display:none; align-items:center; gap:8px; }
+    #recv-prog-bar { width:120px; height:6px; background:#1a1a2a; border-radius:3px; overflow:hidden; }
+    #recv-prog-fill { height:100%; width:0; border-radius:3px; background:linear-gradient(90deg,#ff6b35,#f7c948); transition:width .3s ease; }
+    #recv-prog-txt { color:#888; font-size:.82em; }
+
+    /* ── 设置按钮 & 抽屉 ── */
+    #fab-settings {
+      position:fixed; top:67px; left:12px; z-index:90;
+      width:38px; height:38px; border-radius:50%; border:1px solid var(--border);
+      background:rgba(10,14,23,.72); color:#fff; font-size:1.15em; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; transition:background .2s;
+      backdrop-filter:blur(4px);
+    }
+    #fab-settings:hover { background:rgba(10,14,23,.95); }
+    #fab-fs {
+      position:fixed; top:67px; right:12px; z-index:90;
+      width:38px; height:38px; border-radius:50%; border:1px solid var(--border);
+      background:rgba(10,14,23,.72); color:#fff; font-size:1.05em; cursor:pointer;
+      display:flex; align-items:center; justify-content:center; transition:background .2s;
+      backdrop-filter:blur(4px);
+    }
+    #overlay { position:fixed; inset:0; z-index:199; background:rgba(0,0,0,.5); display:none; }
+    #overlay.show { display:block; }
+    #drawer {
+      position:fixed; top:0; left:0; bottom:0; width:290px; z-index:200;
+      background:var(--card); transform:translateX(-100%); transition:transform .3s ease;
+      box-shadow:4px 0 24px rgba(0,0,0,.55); overflow-y:auto;
+    }
+    #drawer.show { transform:translateX(0); }
+    .dw-hd { padding:16px 20px; background:linear-gradient(135deg,#0d47a1,var(--primary));
+      color:#fff; display:flex; align-items:center; justify-content:space-between; font-size:1.05em; font-weight:600; }
+    .dw-close { background:none; border:none; color:#fff; font-size:1.3em; cursor:pointer; padding:4px 8px; }
+    .dw-sec { padding:14px 20px; border-bottom:1px solid var(--border); }
+    .dw-sec h3 { font-size:.72em; color:#555; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:10px; }
+    .dw-row { display:flex; align-items:center; justify-content:space-between; padding:6px 0; }
+    .dw-row label { font-size:.92em; color:#bbb; }
+    .dw-sel {
+      background:var(--bg); color:var(--text); border:1px solid var(--border);
+      border-radius:6px; padding:5px 10px; font-size:.88em; font-family:inherit; color:#e0e0e0;
+    }
+    .dw-hint { font-size:.75em; color:#555; margin-top:7px; line-height:1.55; }
+    .dw-btn {
+      display:block; width:100%; padding:10px; margin-top:8px; border:none; border-radius:8px;
+      font-size:.92em; font-family:inherit; cursor:pointer; transition:background .2s;
+    }
+    .dw-btn.pri { background:var(--primary); color:#fff; }
+    .dw-btn.pri:hover { background:var(--primary-dark); }
+    .dw-btn.sec { background:#2a2a4a; color:#ccc; }
+    .dw-btn.sec:hover { background:#3a3a5c; }
+
+    /* 全屏适配 */
+    :fullscreen #topbar { display:none; }
+    :fullscreen #main { margin-top:0; }
+    :fullscreen #fab-settings, :fullscreen #fab-fs { top:12px; }
+
+    @keyframes fadeUp { from{opacity:0;transform:translateY(10px);} to{opacity:1;transform:translateY(0);} }
+    #dropzone { animation:fadeUp .4s ease; }
+  </style>
+</head>
+<body>
+
+<!-- 顶部栏 -->
+<div id="topbar">
+  <h1>⚡ 隔空传文件<small>基于 libcimbar 彩色二维码 · 无需网络</small></h1>
+  <div class="sw">
+    <button class="sw-btn on" id="btnSend" onclick="switchMode('send')">📤 发送</button>
+    <button class="sw-btn" id="btnRecv" onclick="switchMode('recv')">📥 接收</button>
+  </div>
+</div>
+
+<!-- FAB 按钮 -->
+<button id="fab-settings" onclick="toggleDrawer()" title="设置">⚙️</button>
+<button id="fab-fs" onclick="toggleFS()" title="全屏">⛶</button>
+
+<!-- 主区域 -->
+<div id="main">
+
+  <!-- 发送端 -->
+  <div id="send-panel">
+    <div id="dropzone" onclick="pickFile()">
+      <div class="icon">📁</div>
+      <div class="txt">点击选择文件，或将文件拖拽到此处</div>
+      <div class="hint">任意格式 · 最大约 33MB（压缩后）· 无网络传输</div>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div class="help">将屏幕上的彩色二维码对准另一台设备的摄像头即可传输</div>
+    <div id="send-bar">
+      <span id="fname">未选择文件</span>
+      <div id="prog-wrap">
+        <div id="prog-bar"><div id="prog-fill"></div></div>
+        <span id="prog-txt"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 接收端 -->
+  <div id="recv-panel">
+    <div id="cam-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <div id="scan">
+        <div class="rect"></div>
+        <div class="c tl"></div><div class="c tr"></div>
+        <div class="c bl"></div><div class="c br"></div>
+        <div id="scan-pulse"></div>
+        <div id="scan-line"></div>
+      </div>
+    </div>
+    <div class="help">将摄像头对准发送端屏幕上的彩色二维码</div>
+    <div id="recv-bar">
+      <span id="recv-txt">正在启动摄像头...</span>
+      <div id="recv-prog-wrap">
+        <div id="recv-prog-bar"><div id="recv-prog-fill"></div></div>
+        <span id="recv-prog-txt"></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 隐藏文件输入 -->
+<input type="file" id="fileInput" style="display:none" onchange="onFile(this)">
+
+<!-- 抽屉 + 遮罩 -->
+<div id="overlay" onclick="toggleDrawer()"></div>
+<div id="drawer">
+  <div class="dw-hd">
+    <span>⚙️ 设置</span>
+    <button class="dw-close" onclick="toggleDrawer()">✕</button>
+  </div>
+
+  <div class="dw-sec">
+    <h3>编码模式</h3>
+    <div class="dw-row">
+      <label>模式</label>
+      <select class="dw-sel" id="optMode" onchange="onMode(this.value)">
+        <option value="B" selected>B — 高速（推荐）</option>
+        <option value="Bm">Bm — 高兼容</option>
+        <option value="Bu">Bu — 最稳定·低速</option>
+        <option value="4C">4C — 四色模式</option>
+      </select>
+    </div>
+    <div class="dw-hint">
+      B: ~106 KB/s · Bm: ~75 KB/s · Bu: 最慢但最可靠<br>
+      手机屏幕→摄像头 建议用 Bm 或 Bu
+    </div>
+  </div>
+
+  <div class="dw-sec">
+    <h3>动画帧率</h3>
+    <div class="dw-row">
+      <label>FPS</label>
+      <select class="dw-sel" id="optFPS" onchange="onFPS(this.value)">
+        <option value="5">5 FPS（调试）</option>
+        <option value="10">10 FPS</option>
+        <option value="15" selected>15 FPS（推荐）</option>
+        <option value="20">20 FPS（光线好）</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="dw-sec">
+    <h3>接收设置</h3>
+    <div class="dw-row">
+      <label>解码模式</label>
+      <select class="dw-sel" id="optRecvMode" onchange="onRecvMode(this.value)">
+        <option value="auto" selected>自动检测</option>
+        <option value="B">B</option>
+        <option value="Bm">Bm</option>
+        <option value="Bu">Bu</option>
+      </select>
+    </div>
+    <div class="dw-hint">自动模式根据画面内容自动识别编码模式</div>
+  </div>
+
+  <div class="dw-sec">
+    <h3>操作</h3>
+    <button class="dw-btn pri" onclick="pickFile()">📁 选择文件</button>
+    <button class="dw-btn sec" onclick="toggleFS()">⛶ 切换全屏</button>
+    <button class="dw-btn sec" onclick="window.open('https://github.com/sz3/libcimbar','_blank')">ℹ️ 关于 libcimbar</button>
+    <button class="dw-btn sec" onclick="window.open('https://github.com/sz3/cfc/releases/latest','_blank')">📱 下载 Android 接收 App</button>
+  </div>
+</div>
+
+<!-- ─── JavaScript ─── -->
+<script>
+//
+//  libcimbar WASM 配置
+//  cimbar_js.js 会在加载时读取 Module 变量
+//
+var Module = {
+  canvas: null,
+  onRuntimeInitialized: function() {
+    console.log('[WASM] Encoder loaded');
+    // 初始化 Main（main.js 在 cimbar_js.js 之后加载，所以需要等一下）
+    setTimeout(initMain, 0);
+  }
+};
+
+let mainReady = false;
+
+function initMain() {
+  if (typeof Main !== 'undefined' && Main.init) {
+    const canvas = document.getElementById('canvas');
+    Main.init(canvas);
+    Main.nextFrame();
+    mainReady = true;
+    console.log('[Main] initialized');
+  }
+}
+
+//
+//  模式切换
+//
+function switchMode(mode) {
+  const isRecv = (mode === 'recv');
+  document.getElementById('btnSend').classList.toggle('on', !isRecv);
+  document.getElementById('btnRecv').classList.toggle('on', isRecv);
+  document.getElementById('send-panel').style.display = isRecv ? 'none' : 'flex';
+  document.getElementById('recv-panel').style.display = isRecv ? 'flex' : 'none';
+  isRecv ? startCam() : stopCam();
+}
+
+//
+//  抽屉
+//
+function toggleDrawer() {
+  document.getElementById('drawer').classList.toggle('show');
+  document.getElementById('overlay').classList.toggle('show');
+}
+
+//
+//  全屏
+//
+function toggleFS() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(()=>{});
+  } else {
+    document.exitFullscreen();
+  }
+}
+
+//
+//  文件选择
+//
+function pickFile() {
+  if (state.encoding) return;
+  document.getElementById('fileInput').click();
+}
+
+function onFile(input) {
+  if (!input.files || !input.files[0]) return;
+  const file = input.files[0];
+  state.file = file;
+  state.encoding = true;
+
+  document.getElementById('fname').textContent = file.name + ' (' + fmtSize(file.size) + ')';
+  document.getElementById('dropzone').classList.add('fileok');
+  document.getElementById('prog-wrap').style.display = 'flex';
+  setProg(0, '正在读取文件...');
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    setProg(5, '正在编码...');
+    doEncode(file.name, data);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fmtSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(2) + ' MB';
+}
+
+//
+//  cimbar 编码
+//
+function doEncode(filename, data) {
+  if (!mainReady) {
+    setTimeout(() => doEncode(filename, data), 200);
+    return;
+  }
+  setProg(10, '初始化编码器...');
+
+  try {
+    // 1. init encode
+    const fnb = new TextEncoder().encode(filename);
+    const fnPtr = Module._malloc(fnb.length + 1);
+    Module.HEAPU8.set(fnb, fnPtr);
+    Module.HEAPU8[fnPtr + fnb.length] = 0;
+
+    const res = Module._cimbare_init_encode(fnPtr, fnb.length, -1);
+    console.log('[Encode] init:', res);
+    Module._free(fnPtr);
+
+    if (res !== 0) {
+      setProg(0, '编码初始化失败 (err ' + res + ')');
+      state.encoding = false;
+      return;
+    }
+
+    setProg(20, '正在压缩+编码...');
+
+    // 2. 把数据写入 WASM 堆并编码
+    // 使用 Main.importFile 的内部逻辑
+    // 直接调用 _cimbare_encode
+    const dataPtr = Module._malloc(data.length);
+    Module.HEAPU8.set(data, dataPtr);
+
+    const encRes = Module._cimbare_encode(dataPtr, data.length);
+    console.log('[Encode] encode:', encRes);
+    Module._free(dataPtr);
+
+    // flush
+    Module._cimbare_encode(0, 0);
+
+    setProg(100, '就绪 — 二维码动画播放中');
+    state.encoding = false;
+
+    // 激活动画
+    if (Main.setActive) Main.setActive(true);
+
+  } catch(e) {
+    console.error('[Encode]', e);
+    setProg(0, '编码出错: ' + e.message);
+    state.encoding = false;
+  }
+}
+
+function setProg(pct, txt) {
+  const fill = document.getElementById('prog-fill');
+  const t = document.getElementById('prog-txt');
+  if (fill) fill.style.width = pct + '%';
+  if (t) t.textContent = txt || (pct + '%');
+}
+
+//
+//  摄像头
+//
+let camStream = null;
+
+async function startCam() {
+  const video = document.getElementById('video');
+  const txt = document.getElementById('recv-txt');
+  txt.textContent = '正在请求摄像头权限...';
+
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, focusMode:'continuous' }
+    });
+    onCam(s, video, txt);
+  } catch(e) {
+    console.warn('[Cam] env failed', e);
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user' } });
+      onCam(s, video, txt);
+      txt.textContent = '前置摄像头已启动，请对准二维码';
+    } catch(e2) {
+      txt.textContent = '摄像头不可用: ' + e2.message;
+    }
+  }
+}
+
+function onCam(stream, video, txt) {
+  camStream = stream;
+  video.srcObject = stream;
+  txt.textContent = '摄像头就绪，等待二维码...';
+
+  // 启动解码
+  if (typeof Recv !== 'undefined' && Recv.init_video) {
+    Recv.init_video(video);
+    txt.textContent = '解码器已启动，请对准二维码';
+  }
+}
+
+function stopCam() {
+  if (camStream) { camStream.getTracks().forEach(t=>t.stop()); camStream = null; }
+  const v = document.getElementById('video');
+  if (v.srcObject) v.srcObject = null;
+}
+
+//
+//  设置回调
+//
+function onMode(v)  { if (mainReady && Main.setMode)  Main.setMode(v); }
+function onFPS(v)   { if (mainReady && Main.setFPS)   Main.setFPS(parseInt(v)); }
+function onRecvMode(v) {
+  if (typeof Recv !== 'undefined' && Recv.setMode)
+    Recv.setMode(v === 'auto' ? 'Auto' : v);
+}
+
+//
+//  拖拽
+//
+(function(){
+  const dz = document.getElementById('dropzone');
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('dragover');
+    if (e.dataTransfer.files.length) {
+      const fi = document.getElementById('fileInput');
+      const dt = new DataTransfer();
+      for (const f of e.dataTransfer.files) dt.items.add(f);
+      fi.files = dt.files;
+      onFile(fi);
+    }
+  });
+})();
+
+//
+//  状态
+//
+const state = { file:null, encoding:false };
+
+//
+//  Service Worker
+//
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(e=>console.log('SW',e));
+}
+</script>
+
+<!-- 加载顺序: 先 cimbar WASM，再 main.js -->
+<script src="cimbar_js.js"></script>
+<script src="main.js"></script>
+<!-- 接收端 WASM（按需加载，体积较大） -->
+<!-- <script src="zstd.js"></script> -->
+<!-- <script src="recv.js"></script> -->
+
+</body>
+</html>
